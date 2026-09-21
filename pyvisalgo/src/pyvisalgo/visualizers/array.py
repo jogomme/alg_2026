@@ -1218,6 +1218,8 @@ class ShellSortVisualizer(InsertionSortVisualizer):
         self.picked_value = None
         self.hole_index = None
         self.pick_progress = 1.0
+        # 새 gap에서는 이전 부분 배열의 정렬 구간을 이어서 표시하지 않습니다.
+        self.sorted_until = 0
         self.msg_phase(f"gap = {self.current_gap}")
         self.msg_action(f"gap을 {self.current_gap}로 정한다.")
         self.msg_detail(f"인덱스 차이가 {self.current_gap}인 원소들을 같은 부분 배열로 본다.")
@@ -1980,6 +1982,21 @@ class HeapSortVisualizer(BubbleSortVisualizer):
         self._update_stats()
         self.wait(850)
 
+    def swap(self, parent, child):
+        parent_value = self.array[parent]
+        child_value = self.array[child]
+        self.swap_pair = (parent, child)
+        self.compare_pair = None
+        self.swap_count += 1
+        self.msg_action(f"#{parent} 과 #{child} 의 값을 교환한다.")
+        self.msg_detail(f"{parent_value} 이 자식 노드로 내려가고, {child_value} 이 부모 노드로 올라간다.")
+        self._update_stats()
+        self._animate_swap(900)
+        self.array[parent], self.array[child] = self.array[child], self.array[parent]
+        self.swap_progress = 0.0
+        self.draw()
+        self.wait(250)
+
     def set_tree_size(self, size):
         self.tree_size = max(0, int(size))
         self.sorted_from = self.tree_size
@@ -2109,7 +2126,6 @@ class HeapSortVisualizer(BubbleSortVisualizer):
         rect = self.view.rect(left, top, right - left, bottom - top)
         pygame.draw.rect(self.screen, fill, rect, border_radius=self.view.length(12))
         pygame.draw.rect(self.screen, border, rect, width=self.view.length(2), border_radius=self.view.length(12))
-        pygame.draw.rect(self.screen, colors.YELLOW, rect, width=self.view.length(3), border_radius=self.view.length(12))
 
     def _draw_tree_edge(self, parent, child):
         if child >= self.tree_size:
@@ -2297,16 +2313,14 @@ class HeapSortVisualizer(BubbleSortVisualizer):
         self.centered_text("정렬 완료", (left + right) / 2, top - 26, 18, colors.GREEN, True)
 
     def _draw_legend(self):
-        y = self._array_layout()[2] - 70
-        self.text("표시", 200, y + 2, 18, colors.TEXT_MUTED, True)
-        self.rect(280, y, 28, 20, (31, 54, 75), (30, 96, 190), 4)
-        self.text("subtree heap", 320, y - 4, 18, colors.TEXT_MUTED)
-        self.rect(520, y, 28, 20, colors.PANEL, (190, 30, 45), 4)
-        self.text("heap 조건 위반", 560, y - 4, 18, colors.TEXT_MUTED)
-        self.rect(780, y, 28, 20, (82, 55, 30), colors.ORANGE, 4)
-        self.text("비교", 820, y - 4, 18, colors.TEXT_MUTED)
-        self.rect(920, y, 28, 20, (35, 72, 52), colors.GREEN, 4)
-        self.text("정렬 완료", 960, y - 4, 18, colors.TEXT_MUTED)
+        self.rect(1080, 38, 28, 20, (31, 54, 75), (30, 96, 190), 4)
+        self.text("subtree heap", 1120, 34, 18, colors.TEXT_MUTED)
+        self.rect(1320, 38, 28, 20, colors.PANEL, (190, 30, 45), 4)
+        self.text("heap 조건 위반", 1360, 34, 18, colors.TEXT_MUTED)
+        self.rect(1080, 78, 28, 20, (82, 55, 30), colors.ORANGE, 4)
+        self.text("비교", 1120, 74, 18, colors.TEXT_MUTED)
+        self.rect(1320, 78, 28, 20, (35, 72, 52), colors.GREEN, 4)
+        self.text("정렬 완료", 1360, 74, 18, colors.TEXT_MUTED)
 
     def _update_stats(self):
         self.msg_stats(f"heap 크기 {self.tree_size}\n비교 {self.compare_count}회\n교환 {self.swap_count}회")
