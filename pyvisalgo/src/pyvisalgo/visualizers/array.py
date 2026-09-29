@@ -1,5 +1,6 @@
 import math
 import time
+from importlib import resources
 
 import pygame
 
@@ -3691,6 +3692,8 @@ class MergeSortVisualizer(BaseVisualizer):
         self.push_animation = None
         self.copy_animation = None
         self.copy_back_animation = None
+        self.prepare_moves = None
+        self.prepare_phase = None
         self.anim_progress = 0.0
         self.merge_only = False
         self.exhausted_side = None
@@ -3720,6 +3723,8 @@ class MergeSortVisualizer(BaseVisualizer):
         self.push_animation = None
         self.copy_animation = None
         self.copy_back_animation = None
+        self.prepare_moves = None
+        self.prepare_phase = None
         self.anim_progress = 0.0
         self.merge_only = False
         self.exhausted_side = None
@@ -3755,16 +3760,44 @@ class MergeSortVisualizer(BaseVisualizer):
         self.section_end()
 
     def prepare_merge(self, left, mid, right):
+        # 이 도입 장면에서는 두 절반이 이미 정렬되었다고 가정합니다.
+        # 원래 위치를 보존한 채 각 원소가 아래의 정렬된 자리로 이동하도록 준비합니다.
+        target = list(self.array)
+        self.prepare_moves = []
+        self.prepare_phase = "down"
+        for group_left, group_right in ((left, mid), (mid + 1, right)):
+            items = list(enumerate(self.array[group_left : group_right + 1], group_left))
+            for destination, (source, value) in enumerate(sorted(items, key=lambda item: item[1]), group_left):
+                target[destination] = value
+                self.prepare_moves.append((source, destination, value, source <= mid))
+
         self.stack = [{"left": left, "right": right, "mid": mid}]
         self.merge_only = True
         self.active_range = (left, right)
         self.compare_pair = None
         self.copy_range = None
         self.insertion_range = None
-        self.msg_action(f"앞 절반 #{left}..#{mid}, 뒤 절반 #{mid + 1}..#{right} 은 이미 정렬되어 있다.")
-        self.msg_detail("두 정렬된 부분 배열을 하나의 정렬된 배열로 합친다.")
+        self.msg_action("두 절반이 각각 정렬되었다고 가정한다.")
+        self.msg_detail("각 원소가 아래의 정렬된 부분 배열 자리로 이동한다.")
+        self._update_stats()
+        self._animate(1100)
+        self.anim_progress = 1.0
+        self.wait(300)
+
+        self.prepare_phase = "up"
+        self.anim_progress = 0.0
+        self.msg_action("정렬된 두 절반을 원래 배열 자리로 복사한다.")
+        self.msg_detail("아직 두 절반을 서로 병합하지는 않았다.")
+        self._update_stats()
+        self._animate(800)
+        self.array = target
+        self.prepare_moves = None
+        self.prepare_phase = None
+        self.msg_action(f"앞 절반 #{left}..#{mid}, 뒤 절반 #{mid + 1}..#{right} 이 각각 정렬되었다.")
+        self.msg_detail("이제 두 정렬된 부분 배열을 하나의 정렬된 배열로 병합한다.")
         self._update_stats()
         self.wait(700)
+        self.section_end()
 
     def single(self, index):
         self.active_range = (index, index)
@@ -3790,6 +3823,22 @@ class MergeSortVisualizer(BaseVisualizer):
         self.msg_detail("두 부분 배열의 앞쪽 값 중 작은 값을 임시 배열에 복사한다.")
         self._update_stats()
         self.wait(650)
+
+    def skip_merge(self, left, mid, right):
+        # 양쪽 경계만 비교해도 두 정렬 구간이 이미 순서대로 이어진다는 것을 보여 줍니다.
+        self.merge_range = (left, mid, right)
+        self.active_range = (left, right)
+        self.compare_pair = (mid, mid + 1)
+        self.copy_range = None
+        self.exhausted_side = None
+        self.compare_count += 1
+        self.msg_action(f"#{mid}({self.array[mid]}) 과 #{mid + 1}({self.array[mid + 1]}) 을 비교한다.")
+        self.msg_detail("왼쪽의 마지막 값이 작거나 같으므로 이미 정렬된 두 구간을 병합하지 않는다.")
+        self._update_stats()
+        self.wait(700)
+        self.compare_pair = None
+        self.merge_range = None
+        self.section_end()
 
     def compare(self, left, right):
         self.compare_pair = (left, right)
@@ -3962,6 +4011,7 @@ class MergeSortVisualizer(BaseVisualizer):
         self.text("반으로 나눈 부분 배열을 정렬한 뒤, 임시 배열을 이용해 다시 합친다.", 72, 115, 26, colors.TEXT_MUTED)
         self._draw_array()
         self._draw_stack()
+        self._draw_prepare_moves()
         self._draw_merge_guides()
         self._draw_merged()
         self._draw_copy_animation()
@@ -4044,6 +4094,9 @@ class MergeSortVisualizer(BaseVisualizer):
                     else:
                         fill = (26, 45, 50)
                         border = colors.BLUE
+                if self.prepare_moves is not None and level == len(self.stack) - 1:
+                    self.rect(x, y, box_width, row_height, fill, border, 4)
+                    continue
                 if (
                     self.insertion_range is not None
                     and level == len(self.stack) - 1
@@ -4079,6 +4132,35 @@ class MergeSortVisualizer(BaseVisualizer):
             self.rect(x, y, box_width, row_height, (89, 39, 77), colors.RED, 4)
             self.centered_text(self.picked_value, x + box_width / 2, y + row_height / 2, max(10, min(18, box_width * 0.42)), colors.TEXT, True)
         self._draw_insertion_sorted_region()
+
+    def _draw_prepare_moves(self):
+        if self.prepare_moves is None:
+            return
+        metrics = self._array_metrics()
+        if metrics is None:
+            return
+
+        start_x, array_top, box_width, box_height, gap = metrics
+        for source, destination, value, is_left in self.prepare_moves:
+            source_x = start_x + source * (box_width + gap)
+            destination_x = start_x + destination * (box_width + gap)
+            stack_x, stack_y, _, stack_height = self._stack_rect(destination)
+            if self.prepare_phase == "up":
+                x = stack_x + (destination_x - stack_x) * self.anim_progress
+                y = stack_y + (array_top - stack_y) * self.anim_progress
+                height = stack_height + (box_height - stack_height) * self.anim_progress
+            else:
+                x = source_x + (stack_x - source_x) * self.anim_progress
+                y = array_top + (stack_y - array_top) * self.anim_progress
+                height = box_height + (stack_height - box_height) * self.anim_progress
+            if is_left:
+                fill = (61, 50, 34)
+                border = colors.YELLOW
+            else:
+                fill = (31, 58, 62)
+                border = colors.BLUE
+            self.rect(x, y, box_width, height, fill, border, 6)
+            self.centered_text(value, x + box_width / 2, y + height / 2, max(13, min(28, box_width * 0.55)), colors.TEXT, True)
 
     def _draw_insertion_sorted_region(self):
         if self.insertion_range is None or self.insertion_sorted_until is None or not self.stack:
@@ -4468,16 +4550,11 @@ class MergeBattleVisualizer(MergeSortVisualizer):
                 fill = (28, 36, 45)
                 border = colors.BORDER
                 if mid is not None:
-                    if index <= mid:
-                        fill = (42, 43, 29)
-                        border = colors.YELLOW
-                    else:
-                        fill = (26, 45, 50)
-                        border = colors.BLUE
+                    fill, border = self._stack_side_colors(index)
                 if self._is_exhausted_index(index):
                     fill = (28, 31, 36)
                     border = colors.TEXT_MUTED
-                if self.compare_pair is not None and index in self.compare_pair and level == len(self.stack) - 1:
+                if self._show_stack_comparison() and self.compare_pair is not None and index in self.compare_pair and level == len(self.stack) - 1:
                     fill = (82, 55, 30)
                     border = colors.ORANGE
                 if self.copy_range is not None and left <= index <= right and level == len(self.stack) - 1:
@@ -4485,6 +4562,14 @@ class MergeBattleVisualizer(MergeSortVisualizer):
                     border = colors.GREEN
                 self.rect(x, y, width, height, fill, border, 4)
                 self.centered_text(self.array[index], x + width / 2, y + height / 2, max(10, min(18, box_width * 0.42)), colors.TEXT)
+
+    def _stack_side_colors(self, index):
+        if self._is_left_side(index):
+            return (42, 43, 29), colors.YELLOW
+        return (26, 45, 50), colors.BLUE
+
+    def _show_stack_comparison(self):
+        return True
 
     def _draw_copy_animation(self):
         if self.copy_back_animation is not None:
@@ -4561,6 +4646,271 @@ class MergeBattleVisualizer(MergeSortVisualizer):
         return index <= mid
 
 
+class MergeSortHeroWarsVisualizer(MergeBattleVisualizer):
+    """작은 값이 먼저 결과 줄로 빠져나가는 병합을 전투로 비유한다."""
+
+    MESSAGE_PANEL_TOP = 640
+    ARENA_BOTTOM_MARGIN = 18
+
+    def __init__(self, title="Merge Sort: Hero Wars", **kwargs):
+        super().__init__(title, **kwargs)
+        self.warriors = self._load_warriors()
+        self.battle_loser = None
+        self.waiting_warrior = None
+        self.fight_starts_at_arena = False
+
+    def setup(self, data):
+        super().setup(data)
+        self.battle_pair = None
+        self.battle_winner = None
+        self.battle_phase = None
+        self.battle_loser = None
+        self.waiting_warrior = None
+        self.fight_starts_at_arena = False
+        self.msg_phase("Hero Wars")
+        self.msg_detail("두 전사가 대결하면, 더 약한 전사가 먼저 전장을 떠나 결과 줄에 선다.")
+
+    def compare(self, left, right):
+        waiting_warrior = self.waiting_warrior
+        self.compare_pair = (left, right)
+        self.battle_pair = (left, right)
+        self.battle_winner = None
+        self.battle_loser = None
+        self.compare_count += 1
+
+        self.fight_starts_at_arena = waiting_warrior in self.battle_pair
+        if self.fight_starts_at_arena:
+            self.battle_phase = "recruit"
+            self.msg_action(f"#{waiting_warrior} 전사는 싸움터에 남아 다음 상대를 기다린다.")
+            self.msg_detail("같은 편의 다음 전사가 원래 줄에서 싸움터로 보충된다.")
+            self._update_stats()
+            self._animate(500)
+
+        self.waiting_warrior = None
+        self.battle_phase = "fight"
+        self.msg_action(f"#{left}({self.array[left]}) 전사와 #{right}({self.array[right]}) 전사가 대결한다.")
+        if self.array[left] <= self.array[right]:
+            self.msg_detail(f"{self.array[left]} 전사가 더 약하므로 먼저 전장을 떠나 결과 줄에 선다.")
+        else:
+            self.msg_detail(f"{self.array[right]} 전사가 더 약하므로 먼저 전장을 떠나 결과 줄에 선다.")
+        self._update_stats()
+        self._animate(1400)
+
+    def add_to_merged(self, source_index, merged):
+        next_merged = list(merged)
+        dest_offset = len(next_merged) - 1
+        self.battle_loser = source_index
+        self.battle_winner = self._other_fighter(source_index)
+        self.copy_count += 1
+        self.battle_phase = "defeat"
+        self.msg_action(f"#{source_index}({self.array[source_index]}) 전사가 패배하여 사라진다.")
+        self.msg_detail("값이 작은 전사가 먼저 결과 배열의 다음 자리를 차지한다.")
+        self._update_stats()
+        self._animate(450)
+
+        # 패배자만 결과 줄로 이동하고, 승자는 싸움터에 남아 다음 상대를 기다린다.
+        self.battle_phase = "resolve"
+        self.copy_animation = (source_index, dest_offset, next_merged[dest_offset])
+        self.msg_action(f"#{source_index}({self.array[source_index]}) 전사가 결과 줄로 이동한다.")
+        self.msg_detail("더 강한 전사는 싸움터에 남아 다음 전사와 다시 대결한다.")
+        self._update_stats()
+        self._animate(650)
+        self.merged = next_merged
+        self.merged_from[dest_offset] = source_index
+        self.copy_animation = None
+        self.waiting_warrior = self.battle_winner
+        self.battle_phase = "waiting"
+
+    def exhausted(self, side):
+        self.battle_loser = None
+        self.waiting_warrior = None
+        super().exhausted(side)
+
+    def draw_content(self):
+        self.text(self.title, 70, 55, 46, colors.TEXT, True)
+        self.text("두 전사가 대결하면 작은 값의 전사가 먼저 결과 줄로 빠져나간다.", 72, 115, 26, colors.TEXT_MUTED)
+        self._draw_array()
+        self._draw_stack()
+        self._draw_prepare_moves()
+        self._draw_merge_guides()
+        self._draw_merged()
+        self._draw_copy_animation()
+        self._draw_legend()
+
+    def _draw_stack(self):
+        super()._draw_stack()
+        if not self.stack:
+            return
+
+        for index in self.merged_from.values():
+            # 이미 결과 줄에 선 전사는 merge 대기 줄에서도 완전히 빠진다.
+            x, y, width, height = MergeSortVisualizer._stack_rect(self, index)
+            self.rect(x - 2, y - 2, width + 4, height + 4, colors.BACKGROUND, colors.BACKGROUND, 0)
+
+        for index in self.battle_pair or ():
+            # merge 줄은 아직 출전하지 않은 후보만 남기는 대기 줄이다.
+            if self.battle_phase == "resolve":
+                x, y, width, height = MergeSortVisualizer._stack_rect(self, index)
+            else:
+                x, y, width, height = self._battle_rect(index)
+            self.rect(x - 2, y - 2, width + 4, height + 4, colors.BACKGROUND, colors.BACKGROUND, 0)
+
+        # 출전한 후보는 원소 칸 대신 전사 모양으로만 그려 대결의 주인공을 드러낸다.
+        frame = self.stack[-1]
+        for index in self.battle_pair or ():
+            if not frame["left"] <= index <= frame["right"]:
+                continue
+            if index == self.battle_loser and self.battle_phase in ("resolve", "waiting"):
+                continue
+            if index == self.battle_winner and self.battle_phase in ("resolve", "waiting"):
+                # 패배자가 떠난 뒤에도 승자는 같은 싸움터에 남는다.
+                x, y, width, height = self._battle_rect(index)
+            else:
+                x, y, width, height = self._stack_rect(index)
+            self._draw_warrior(index, x + width / 2, y + height / 2, self._warrior_scale(index))
+
+    def _stack_side_colors(self, index):
+        if self._is_left_side(index):
+            return (81, 42, 32), (232, 111, 62)
+        return (25, 57, 91), (54, 151, 231)
+
+    def _show_stack_comparison(self):
+        # 비교 색은 array 줄에만 표시하고, merge 줄은 어느 편인지 계속 드러낸다.
+        return False
+
+    def _draw_copy_animation(self):
+        if self.copy_back_animation is not None:
+            self._draw_copy_back_animation()
+        if self.copy_animation is None or self.merge_range is None:
+            return
+
+        source_index, dest_offset, _ = self.copy_animation
+        left, _, _ = self.merge_range
+        dest_x, dest_y, dest_width, _ = self._merged_rect(left + dest_offset)
+        source_x, source_y, source_width, source_height = self._battle_meet_rect(source_index, 1.0)
+        start_x = source_x + source_width / 2
+        start_y = source_y + source_height / 2
+        end_x = dest_x + dest_width / 2
+        end_y = dest_y + 16
+        progress = self.anim_progress
+        x = start_x + (end_x - start_x) * progress
+        y = start_y + (end_y - start_y) * progress
+        # 패배자가 결과 줄로 갈 때는 전사가 아니라 정렬될 값만 이동한다.
+        self._draw_value_badge(source_index, x, y, 0.8)
+
+    def _battle_rect(self, index):
+        if self.battle_phase == "fight":
+            return self._battle_fight_rect(index)
+        if self.battle_phase == "recruit":
+            if index == self.waiting_warrior:
+                return self._battle_meet_rect(index, 1.0)
+            return self._battle_meet_rect(index, self.anim_progress)
+        if self.battle_phase in ("defeat", "resolve", "waiting"):
+            return self._battle_meet_rect(index, 1.0)
+        return super()._battle_rect(index)
+
+    def _battle_meet_rect(self, index, progress=1.0):
+        source_x, source_y, width, height = MergeSortVisualizer._stack_rect(self, index)
+        metrics = self._array_metrics()
+        if metrics is None or self.merge_range is None or self.battle_pair is None:
+            return source_x, source_y, width, height
+        start_x, _, _, _, gap = metrics
+        left, _, right = self.merge_range
+        first_x = start_x + left * (width + gap)
+        last_x = start_x + right * (width + gap)
+        arena_center = (first_x + last_x + width) / 2
+        # 배열 칸 바로 아래가 아니라, 전사 한 명이 설 수 있는 전투 공간까지 내려온다.
+        hero_width, hero_height = self._warrior_dimensions(index)
+        # 전사 본체는 떨어뜨리고, 양쪽 검끝만 맞닿는 간격을 둔다.
+        arena_gap = width * 0.58 + hero_width * 0.28
+        target_x = arena_center - arena_gap - width / 2 if index == self.battle_pair[0] else arena_center + arena_gap - width / 2
+
+        target_y = source_y + height * 2.35 + hero_height * 1.25
+        x = source_x + (target_x - source_x) * progress
+        y = source_y + (target_y - source_y) * progress
+        return x, y, width, height
+
+    def _battle_fight_rect(self, index):
+        start = MergeSortVisualizer._stack_rect(self, index)
+        meet = self._battle_meet_rect(index, 1.0)
+        approach = 1.0 if self.fight_starts_at_arena else min(1.0, self.anim_progress / 0.22)
+        x = start[0] + (meet[0] - start[0]) * approach
+        y = start[1] + (meet[1] - start[1]) * approach
+        if approach == 1.0:
+            # 전사들이 세 번 맞부딪혔다가 물러나는 움직임을 반복한다.
+            strike = abs(math.sin((self.anim_progress - 0.22) * math.pi * 6))
+            direction = 1 if index == self.battle_pair[0] else -1
+            x += direction * meet[2] * 0.17 * strike
+            y -= meet[3] * 0.12 * strike
+        return x, y, meet[2], meet[3]
+
+    def _warrior_scale(self, index):
+        if index == self.battle_loser and self.battle_phase == "defeat":
+            return max(0.0, 1.0 - self.anim_progress)
+        return 1.0
+
+    def _other_fighter(self, index):
+        if self.battle_pair is None:
+            return None
+        return self.battle_pair[1] if index == self.battle_pair[0] else self.battle_pair[0]
+
+    def _warrior_dimensions(self, index):
+        """기본 전사 크기와 설명 패널 위 여유 공간 중 작은 크기를 사용한다."""
+        _, source_y, _, row_height = MergeSortVisualizer._stack_rect(self, index)
+        warrior = self.warriors["left" if self._is_left_side(index) else "right"]
+        aspect_ratio = warrior.get_height() / warrior.get_width()
+        default_width = min(320, max(172, self._array_metrics()[2] * 2.8))
+
+        # 전투 중심은 merge 줄 아래와 전사 높이에 따라 함께 내려간다.
+        # 스프라이트의 하단이 설명 패널보다 위에 오도록 가능한 높이를 구한다.
+        available_height = (
+            self.MESSAGE_PANEL_TOP
+            - self.ARENA_BOTTOM_MARGIN
+            - source_y
+            - row_height * 2.35
+        ) / 1.63
+        available_width = max(0, available_height / aspect_ratio)
+        width = min(default_width, available_width)
+        return width, width * aspect_ratio
+
+    def _load_warriors(self):
+        warriors = {}
+        for side, filename in (("left", "merge_hero_wars_red.png"), ("right", "merge_hero_wars_blue.png")):
+            asset = resources.files("pyvisalgo").joinpath("assets", filename)
+            with resources.as_file(asset) as path:
+                warriors[side] = pygame.image.load(str(path)).convert_alpha()
+        return warriors
+
+    def _draw_warrior(self, index, center_x, center_y, scale):
+        if scale <= 0.0:
+            return
+        is_left = self._is_left_side(index)
+        warrior = self.warriors["left" if is_left else "right"]
+        base_width, base_height = self._warrior_dimensions(index)
+        logical_width = base_width * scale
+        logical_height = base_height * scale
+        image_width = max(1, self.view.length(logical_width))
+        image_height = max(1, self.view.length(logical_height))
+        image = pygame.transform.smoothscale(warrior, (image_width, image_height))
+        left, top = self.view.point(center_x - logical_width / 2, center_y - logical_height * 0.62)
+        self.screen.blit(image, (left, top))
+
+        # 검이 향한 쪽과 반대쪽에 있는 머리 위로 값을 표시한다.
+        head_ratio = 0.30 if is_left else 0.70
+        head_x = center_x - logical_width / 2 + logical_width * head_ratio
+        # 숫자 배지는 얼굴을 덮지 않고, 전사의 머리 위에 떠 있도록 배치한다.
+        head_y = center_y - logical_height * 0.78
+        self._draw_value_badge(index, head_x, head_y, scale)
+
+    def _draw_value_badge(self, index, center_x, center_y, scale=1.0):
+        badge_x, badge_y = self.view.point(center_x, center_y)
+        radius = self.view.length(max(13, 19 * scale))
+        badge_color = (134, 45, 40) if self._is_left_side(index) else (35, 92, 144)
+        pygame.draw.circle(self.screen, badge_color, (badge_x, badge_y), radius)
+        pygame.draw.circle(self.screen, colors.TEXT, (badge_x, badge_y), radius, width=self.view.length(2))
+        self.centered_text(self.array[index], center_x, center_y, max(11, 16 * scale), colors.TEXT, True)
+
+
 class QuickSortVisualizer(BaseVisualizer):
     def __init__(self, title="Quick Sort", **kwargs):
         super().__init__(title, **kwargs)
@@ -4569,6 +4919,9 @@ class QuickSortVisualizer(BaseVisualizer):
         self.active_range = None
         self.pivot_index = None
         self.pivot_value = None
+        self.pivot_candidates = ()
+        self.candidate_pair = None
+        self.candidate_selected = None
         self.p_index = None
         self.q_index = None
         self.left_done = None
@@ -4609,6 +4962,9 @@ class QuickSortVisualizer(BaseVisualizer):
         self.active_range = None
         self.pivot_index = None
         self.pivot_value = None
+        self.pivot_candidates = ()
+        self.candidate_pair = None
+        self.candidate_selected = None
         self.p_index = None
         self.q_index = None
         self.left_done = None
@@ -4643,14 +4999,27 @@ class QuickSortVisualizer(BaseVisualizer):
         self.wait(700)
 
     def push(self, left, right):
-        self.stack.append({"left": left, "right": right, "pivot": None})
+        # 각 재귀 depth는 자신이 partition하며 확정한 양쪽 구간을 따로 기억합니다.
+        # 전역 left_done/right_done만 사용하면 부모 depth의 표식이 자식 행에도 섞입니다.
+        self.stack.append({
+            "left": left,
+            "right": right,
+            "pivot": None,
+            "left_done": None,
+            "right_done": None,
+        })
         self.active_range = (left, right)
         self.pivot_index = None
         self.pivot_value = None
+        self.pivot_candidates = ()
+        self.candidate_pair = None
+        self.candidate_selected = None
         self.p_index = None
         self.q_index = None
-        self.left_done = left
-        self.right_done = right
+        # p와 q가 아직 탐색을 시작하지 않았으므로, 분류가 끝난 구간은 없습니다.
+        # accept_left()/accept_right()가 호출된 뒤에만 해당 쪽을 색칠합니다.
+        self.left_done = None
+        self.right_done = None
         self.compare_index = None
         self.swap_pair = None
         self.scan_start_index = None
@@ -4680,11 +5049,23 @@ class QuickSortVisualizer(BaseVisualizer):
         self.stack_anim_level = None
         self.stack_anim_kind = None
         self.stack_anim_progress = 0.0
-        self.active_range = None if not self.stack else (self.stack[-1]["left"], self.stack[-1]["right"])
+        if not self.stack:
+            self.active_range = None
+            self.left_done = None
+            self.right_done = None
+            return
+
+        parent = self.stack[-1]
+        self.active_range = (parent["left"], parent["right"])
+        self.left_done = parent["left_done"]
+        self.right_done = parent["right_done"]
 
     def set_pivot(self, index):
         self.pivot_index = index
         self.pivot_value = self.array[index]
+        self.pivot_candidates = ()
+        self.candidate_pair = None
+        self.candidate_selected = None
         if self.stack:
             self.stack[-1]["pivot"] = index
         self.compare_index = None
@@ -4695,7 +5076,62 @@ class QuickSortVisualizer(BaseVisualizer):
         self.wait(700)
         self.section_end()
 
+    def show_pivot_candidates(self, left, middle, right):
+        self.pivot_candidates = (left, middle, right)
+        self.candidate_pair = None
+        self.candidate_selected = None
+        self.msg_action(f"#{left}, #{middle}, #{right} 중 median pivot을 고른다.")
+        self.msg_detail("왼쪽, 가운데, 오른쪽 원소의 중간값을 pivot으로 선택한다.")
+        self._update_stats()
+        self.wait(700)
+        self.section_end()
+
+    def compare_pivot_candidates(self, first, second):
+        self.candidate_pair = (first, second)
+        self.msg_action(f"#{first}({self.array[first]}) 과 #{second}({self.array[second]}) 을 비교한다.")
+        self.msg_detail("세 후보 중 값의 중간값을 찾아 극단적인 pivot 선택을 피한다.")
+        self._update_stats()
+        self.wait(650)
+        self.candidate_pair = None
+        self.section_end()
+
+    def choose_median_pivot(self, index):
+        self.candidate_selected = index
+        self.pivot_index = index
+        self.pivot_value = self.array[index]
+        if self.stack:
+            self.stack[-1]["pivot"] = index
+        self.msg_action(f"#{index}({self.pivot_value}) 을 median pivot으로 선택한다.")
+        self.msg_detail("세 후보의 중간값이므로 한쪽으로 치우친 partition을 줄일 수 있다.")
+        self._update_stats()
+        self.wait(700)
+        self.section_end()
+
+    def show_ninther_candidates(self, indices):
+        self.pivot_candidates = tuple(indices)
+        self.candidate_pair = None
+        self.candidate_selected = None
+        self.msg_action("9개 표본을 세 묶음으로 나누어 median을 구한다.")
+        self.msg_detail("세 묶음의 median을 다시 비교하는 Tukey's ninther 방식으로 pivot을 고른다.")
+        self._update_stats()
+        self.wait(800)
+        self.section_end()
+
+    def choose_ninther_pivot(self, index):
+        self.candidate_selected = index
+        self.pivot_index = index
+        self.pivot_value = self.array[index]
+        if self.stack:
+            self.stack[-1]["pivot"] = index
+        self.msg_action(f"#{index}({self.pivot_value}) 을 ninther pivot으로 선택한다.")
+        self.msg_detail("9개 표본의 가운데 성격을 가진 값으로 partition의 치우침을 줄인다.")
+        self._update_stats()
+        self.wait(800)
+        self.section_end()
     def move_pivot_to_left(self, pivot_index, left):
+        self.pivot_candidates = ()
+        self.candidate_pair = None
+        self.candidate_selected = None
         if pivot_index == left:
             self.msg_action(f"pivot이 이미 맨 왼쪽 #{left} 위치에 있다.")
             self.msg_detail("partition을 시작한다.")
@@ -4712,10 +5148,11 @@ class QuickSortVisualizer(BaseVisualizer):
         self.q_index = index
         self.compare_index = None
 
-    def compare_with_pivot(self, index):
+    def compare_with_pivot(self, index, increasing=True):
         self.compare_index = index
         self.scan_index = index
-        self.scan_direction = "p" if self.p_index == index else "q"
+        # p와 q가 같은 index에서 만날 수 있으므로, index 비교로 방향을 추측하지 않습니다.
+        self.scan_direction = "p" if increasing else "q"
         if self.active_range is not None and self.scan_direction == "p":
             self.scan_start_index = max(self.active_range[0], index - 1)
         elif self.active_range is not None:
@@ -4762,6 +5199,8 @@ class QuickSortVisualizer(BaseVisualizer):
 
     def accept_left(self, index):
         self.left_done = index
+        if self.stack:
+            self.stack[-1]["left_done"] = index
         self.compare_index = None
         self.msg_action("p가 오른쪽으로 이동하며 큰 값을 찾는다.")
         self.msg_detail(f"#{index}까지는 pivot 이하로 분류되었다.")
@@ -4770,6 +5209,8 @@ class QuickSortVisualizer(BaseVisualizer):
 
     def accept_right(self, index):
         self.right_done = index
+        if self.stack:
+            self.stack[-1]["right_done"] = index
         self.compare_index = None
         self.msg_action("q가 왼쪽으로 이동하며 작은 값을 찾는다.")
         self.msg_detail(f"#{index}부터는 pivot보다 큰 값으로 분류되었다.")
@@ -4838,6 +5279,10 @@ class QuickSortVisualizer(BaseVisualizer):
         self.p_index = None
         self.q_index = None
         self.pivot_index = None
+        # 마지막 삽입 정렬은 pivot 기준 분류를 더 이상 보여 주지 않습니다.
+        # 이전 partition에서 남은 노랑/파랑 표식이 섞이지 않도록 초기화합니다.
+        self.left_done = None
+        self.right_done = None
         self.compare_index = None
         self.picked_index = None
         self.picked_from = None
@@ -4991,7 +5436,13 @@ class QuickSortVisualizer(BaseVisualizer):
         self.text("pivot을 기준으로 작은 값과 큰 값을 나누고, 각 부분 배열을 다시 정렬한다.", 72, 115, 26, colors.TEXT_MUTED)
         self._draw_array()
         self._draw_stack()
+        if not self.stack:
+            self._draw_quick_insertion_sorted_region()
         self._draw_legend()
+        if self.insertion_range is not None and not self.stack:
+            _, start_x, top, box_width, box_height, gap = self._layout_metrics()
+            value_size = max(13, min(30, box_width * 0.52))
+            self._draw_final_insertion_move(start_x, top, box_width, box_height, gap, value_size)
 
     def _draw_array(self):
         if not self.array:
@@ -4999,11 +5450,14 @@ class QuickSortVisualizer(BaseVisualizer):
         count, start_x, top, box_width, box_height, gap = self._layout_metrics()
         value_size = max(13, min(30, box_width * 0.52))
         index_size = max(10, min(18, box_width * 0.34))
+        final_insertion = self.insertion_range is not None and not self.stack
+        moving_shift = self.shift_pair[0] if final_insertion and self.shift_pair is not None and not self.shift_pick else None
         swapping = set(self.swap_pair or ())
         draw_order = [index for index in range(count) if index not in swapping]
         draw_order += [index for index in range(count) if index in swapping]
         for index in draw_order:
             value = self.array[index]
+            display_value = value
             x = start_x + index * (box_width + gap)
             y = top
             if index in swapping:
@@ -5013,16 +5467,16 @@ class QuickSortVisualizer(BaseVisualizer):
             fill = colors.PANEL
             border = colors.BORDER
             text_color = colors.TEXT
-            if self.active_range is not None and self.active_range[0] <= index <= self.active_range[1]:
+            if not final_insertion and self.active_range is not None and self.active_range[0] <= index <= self.active_range[1]:
                 fill = (30, 47, 59)
                 border = colors.BLUE
-            if self.insertion_range is not None and self.insertion_range[0] <= index <= self.insertion_range[1]:
+            if not final_insertion and self.insertion_range is not None and self.insertion_range[0] <= index <= self.insertion_range[1]:
                 fill = (41, 50, 35)
                 border = colors.GREEN
-            if self.left_done is not None and self.active_range and self.active_range[0] < index <= self.left_done:
+            if not final_insertion and self.left_done is not None and self.active_range and self.active_range[0] < index <= self.left_done:
                 fill = (42, 43, 29)
                 border = colors.YELLOW
-            if self.right_done is not None and self.active_range and self.right_done <= index <= self.active_range[1]:
+            if not final_insertion and self.right_done is not None and self.active_range and self.right_done <= index <= self.active_range[1]:
                 fill = (26, 45, 50)
                 border = colors.BLUE
             if index == self.compare_index:
@@ -5031,11 +5485,37 @@ class QuickSortVisualizer(BaseVisualizer):
             if self.swap_pair is not None and index in self.swap_pair:
                 fill = (62, 66, 107)
                 border = colors.BLUE
+            # pivot으로 최종 위치가 확정된 원소는 마지막 삽입 정렬 중에도 유지합니다.
+            # 다만 left_done/right_done의 노랑·파랑 분류 표식은 final_insertion에서 숨깁니다.
             if index in self.fixed:
                 fill = (35, 72, 52)
                 border = colors.GREEN
+            if index in self.pivot_candidates:
+                fill = (42, 43, 29)
+                border = colors.YELLOW
+            if self.candidate_pair is not None and index in self.candidate_pair:
+                fill = (82, 55, 30)
+                border = colors.ORANGE
+            if index == self.candidate_selected:
+                fill = (89, 39, 77)
+                border = colors.RED
+            # 마지막 삽입 정렬에서는 왼쪽의 연속된 구간 전체가 정렬 완료 상태입니다.
+            if (
+                final_insertion
+                and self.insertion_sorted_until is not None
+                and self.insertion_range[0] <= index <= self.insertion_sorted_until
+            ):
+                fill = (35, 72, 52)
+                border = colors.GREEN
+            # 최종 삽입 정렬은 별도 stack 행 없이 원본 배열에서 직접 보여 줍니다.
+            # 이동 중인 원소의 원래 자리와 삽입을 위해 비운 자리는 빈 칸으로 남깁니다.
+            if final_insertion and (index == moving_shift or index == self.hole_index):
+                fill = (21, 25, 31)
+                border = (61, 69, 82)
+                text_color = colors.TEXT_MUTED
+                display_value = ""
             self.rect(x, y, box_width, box_height, fill, border, 6)
-            self.centered_text(value, x + box_width / 2, y + box_height / 2, value_size, text_color, True)
+            self.centered_text(display_value, x + box_width / 2, y + box_height / 2, value_size, text_color, True)
             slot_x = start_x + index * (box_width + gap)
             self.centered_text(f"#{index}", slot_x + box_width / 2, top + box_height + 24, index_size, colors.TEXT_MUTED)
 
@@ -5062,6 +5542,8 @@ class QuickSortVisualizer(BaseVisualizer):
             left = frame["left"]
             right = frame["right"]
             pivot = frame["pivot"]
+            left_done = frame["left_done"]
+            right_done = frame["right_done"]
             self.text(f"depth {level + 1}", 78 + row_x_offset, top + 7, 17, colors.TEXT_MUTED)
             swapping = set(self.swap_pair or ()) if level == active_level else set()
             moving_shift = self.shift_pair[0] if level == active_level and self.shift_pair is not None and not self.shift_pick else None
@@ -5089,12 +5571,21 @@ class QuickSortVisualizer(BaseVisualizer):
                     if index == pivot:
                         fill = (89, 39, 77)
                         border = colors.RED
-                    elif self.left_done is not None and left < index <= self.left_done:
+                    elif left_done is not None and left < index <= left_done:
                         fill = (42, 43, 29)
                         border = colors.YELLOW
-                    elif self.right_done is not None and self.right_done <= index <= right:
+                    elif right_done is not None and right_done <= index <= right:
                         fill = (26, 45, 50)
                         border = colors.BLUE
+                if level == active_level and index in self.pivot_candidates:
+                    fill = (42, 43, 29)
+                    border = colors.YELLOW
+                if level == active_level and self.candidate_pair is not None and index in self.candidate_pair:
+                    fill = (82, 55, 30)
+                    border = colors.ORANGE
+                if level == active_level and index == self.candidate_selected:
+                    fill = (89, 39, 77)
+                    border = colors.RED
                 if level == active_level:
                     if index == self.compare_index:
                         fill = (82, 55, 30)
@@ -5165,6 +5656,8 @@ class QuickSortVisualizer(BaseVisualizer):
     def _draw_quick_insertion_pick(self):
         if self.picked_from is None or self.picked_value is None:
             return
+        if self.insertion_range is not None and not self.stack:
+            return
         x, y, box_width, row_height = self._quick_stack_rect(self.picked_from)
         if self.shift_pick and self.shift_pair is not None:
             _, target = self.shift_pair
@@ -5177,14 +5670,21 @@ class QuickSortVisualizer(BaseVisualizer):
         self.centered_text(self.picked_value, x + box_width / 2, y + row_height / 2, max(10, min(16, box_width * 0.38)), colors.TEXT, True)
 
     def _draw_quick_insertion_sorted_region(self):
-        if self.insertion_range is None or self.insertion_sorted_until is None or not self.stack:
+        if self.insertion_range is None or self.insertion_sorted_until is None:
             return
         left, _ = self.insertion_range
         right = min(self.insertion_sorted_until, len(self.array) - 1)
         if right < left:
             return
-        _, start_x, _, box_width, _, gap = self._layout_metrics()
-        _, top, _, row_height = self._quick_stack_rect(left)
+        _, start_x, array_top, box_width, array_height, gap = self._layout_metrics()
+        if self.stack:
+            _, top, _, row_height = self._quick_stack_rect(left)
+            label_y = top + row_height + 24
+        else:
+            top = array_top
+            row_height = array_height
+            # 원본 배열의 index 표시는 아래에 있으므로, 최종 삽입 정렬의 라벨은 위에 둡니다.
+            label_y = top - 20
         x = start_x + left * (box_width + gap) - 5
         width = (right - left + 1) * box_width + (right - left) * gap + 10
         rect = self.view.rect(x, top - 5, width, row_height + 10)
@@ -5195,7 +5695,36 @@ class QuickSortVisualizer(BaseVisualizer):
             width=self.view.length(2),
             border_radius=self.view.length(8),
         )
-        self.centered_text("정렬된 구간", x + width / 2, top + row_height + 24, 17, (88, 126, 101), True)
+        self.centered_text("정렬된 구간", x + width / 2, label_y, 17, (88, 126, 101), True)
+
+    def _draw_final_insertion_move(self, start_x, top, box_width, box_height, gap, value_size):
+        """stack이 비어 있는 최종 삽입 정렬의 이동을 원본 배열 위에 그린다."""
+        if self.picked_from is None and self.shift_pair is None:
+            return
+
+        if self.picked_value is not None:
+            # 마지막 삽입 정렬도 다른 삽입 정렬처럼 값을 위로 빼서 보여 줍니다.
+            waiting_y = top - box_height * 1.25
+            source_x = start_x + self.picked_from * (box_width + gap)
+            if self.shift_pick and self.shift_pair is not None:
+                target_x = start_x + self.shift_pair[1] * (box_width + gap)
+                x = source_x + (target_x - source_x) * self.shift_progress
+                y = waiting_y + (top - waiting_y) * self.shift_progress
+            else:
+                x = source_x
+                y = top + (waiting_y - top) * self.pick_progress
+            self.rect(x, y, box_width, box_height, (89, 39, 77), colors.RED, 6)
+            self.centered_text(self.picked_value, x + box_width / 2, y + box_height / 2, value_size, colors.TEXT, True)
+
+        # 뺀 값은 위에 남겨 두면서, 비교 결과 큰 값은 원본 배열 행을 따라 밉니다.
+        if self.shift_pair is not None and not self.shift_pick:
+            source, target = self.shift_pair
+            source_x = start_x + source * (box_width + gap)
+            target_x = start_x + target * (box_width + gap)
+            x = source_x + (target_x - source_x) * self.shift_progress
+            y = top
+            self.rect(x, y, box_width, box_height, (62, 66, 107), colors.BLUE, 6)
+            self.centered_text(self.array[source], x + box_width / 2, y + box_height / 2, value_size, colors.TEXT, True)
 
     def _quick_stack_rect(self, index):
         _, start_x, _, box_width, _, gap = self._layout_metrics()
@@ -5294,6 +5823,9 @@ class QuickSortVisualizer(BaseVisualizer):
         box_height = 58
         start_x = 150 + (max_width - (box_width * count + gap * (count - 1))) / 2
         top = 170
+        # 최종 삽입 정렬에서는 원본 배열을 내려, 값을 위로 빼는 애니메이션 공간을 만듭니다.
+        if self.insertion_range is not None and not self.stack:
+            top += 110
         return count, start_x, top, box_width, box_height, gap
 
     def _update_stats(self):
